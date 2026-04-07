@@ -7,17 +7,16 @@
 #include <linux/in.h>
 #include <linux/ip.h>
 
-struct event {
-    __u32 src_ip;
-};
+#define MAX_IPS 10000
 
-//  Déclaration Map eBPF : Le Ring Buffer
+// Déclaration Map eBPF Agrégation par CPU
 struct {
-    __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 256 * 1024); // Taille du buffer (256 KB)
-} events SEC(".maps");
+    __uint(type, BPF_MAP_TYPE_PERCPU_HASH);
+    __uint(max_entries, MAX_IPS);
+    __type(key, __u32);
+    __type(value, __u64);
+} icmp_stats SEC(".maps");
 
-//  (Hook) XDP
 SEC("xdp")
 int xdp_drop_icmp(struct xdp_md *ctx)
 {
@@ -26,32 +25,34 @@ int xdp_drop_icmp(struct xdp_md *ctx)
 
     struct ethhdr *eth = data;
 
-    // (Boundary check)
     if ((void *)(eth + 1) > data_end) {
-	return XDP_PASS;
+        return XDP_PASS;
     }
 
     if (eth->h_proto != __constant_htons(ETH_P_IP)) {
-	return XDP_PASS;
+        return XDP_PASS;
     }
 
     struct iphdr *ip = (void *)(eth + 1);
 
     if ((void *)(ip + 1) > data_end) {
-	return XDP_PASS;
+        return XDP_PASS;
     }
 
     if (ip->protocol == IPPROTO_ICMP) {
+        __u32 src_ip = ip->saddr;
+        __u64 *counter;
 
-	struct event *e;
-	e = bpf_ringbuf_reserve(&events, sizeof(struct event), 0);
-
-	if (e) {
-	    e->src_ip = ip->saddr;
-
-	    bpf_ringbuf_submit(e, 0);
-	}
-	return XDP_DROP;
+        counter = bpf_map_lookup_elem(&icmp_stats, &src_ip);
+        if (counter) {
+            // no need (__sync_fetch_and_add)
+            // une map PERCPU.
+            *counter += 1;
+        } else {
+            __u64 init_val = 1;
+            bpf_map_update_elem(&icmp_stats, &src_ip, &init_val, BPF_ANY);
+        }
+        return XDP_DROP;
     }
 
     return XDP_PASS;
