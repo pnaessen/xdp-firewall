@@ -1,38 +1,49 @@
 # xdp-firewall
 
-> A high-performance network packet filter demonstrating Kernel Bypass capabilities using eBPF/XDP, written in C (Kernel Space) and Go (User Space).
+> A high-performance packet filter using eBPF/XDP in kernel space (C) and a Go user-space loader/monitor.
 
-## 📖 Overview
+## Overview
 
-This project implements an ultra-low latency network firewall. By attaching an **eBPF (extended Berkeley Packet Filter)** program directly to the **XDP (eXpress Data Path)** hook in the network interface card (NIC) driver, it drops malicious packets (currently filtering ICMP/Ping) *before* the Linux kernel network stack even allocates an `sk_buff`.
+This project implements an ultra-low-latency XDP firewall that drops ICMP packets before they reach the Linux network stack.
 
-This hybrid architecture leverages C for raw memory manipulation in the kernel and Go for asynchronous event monitoring in user space.
+The eBPF program is attached at the XDP hook and keeps counters per source IP in a PERCPU map. The Go daemon loads the program, attaches it to a network interface, and periodically prints aggregated drop statistics.
 
-## 🏗️ Architecture & Features
+## Architecture and Features
 
-* **Kernel Bypass (XDP)**: Intercepts raw Ethernet/IPv4 frames directly from DMA memory, achieving near-zero latency packet filtering.
-* **Hybrid C/Go Toolchain**: Uses Cilium's `bpf2go` to compile the C kernel code via LLVM/Clang and automatically generate seamless Go bindings.
-* **Lockless Communication**: Implements an eBPF `BPF_MAP_TYPE_RINGBUF` (Ring Buffer) for highly efficient, lockless event streaming (blocked IP addresses) from the kernel to the user space daemon.
-* **Asynchronous Go Daemon**: A concurrent user-space application that loads the eBPF bytecode, manages the network interface attachment, and listens to the Ring Buffer via non-blocking Goroutines.
-* **Graceful Shutdown**: Strict POSIX signal handling in Go (`SIGINT`, `SIGTERM`) to ensure safe memory cleanup and proper detachment of the eBPF program from the NIC.
+* **XDP packet filtering**: Drops ICMP packets (`XDP_DROP`) at driver level.
+* **PERCPU counters**: Uses a `BPF_MAP_TYPE_PERCPU_HASH` map (`icmp_stats`) keyed by source IPv4 address.
+* **Low-contention stats path**: Per-CPU counters reduce write contention inside the kernel.
+* **Go integration with bpf2go**: Uses Cilium `bpf2go` to compile the eBPF program and generate typed Go bindings.
+* **Periodic monitoring**: User space iterates over the map every second, sums per-CPU values, and prints delta + total drops per IP.
+* **Graceful shutdown**: Handles `SIGINT` and `SIGTERM` and detaches the XDP program cleanly.
 
-## ⚙️ Prerequisites
+## Prerequisites
 
-To compile and run this project, your Linux environment needs the following toolchain:
-* Linux Kernel 5.8+ (for Ring Buffer support)
-* `clang` and `llvm` (to target the `bpf` virtual architecture)
+* Linux kernel with eBPF/XDP support
+* `clang` and `llvm`
 * `golang` (1.21+)
-* `libbpf-dev` and `linux-headers`
+* `libbpf-dev` and Linux headers
 
-## 🚀 Build and Usage
+## Build and Run
 
 ```bash
-# 1. Compile the C code (eBPF) and generate the Go stubs
+# 1) Generate eBPF objects and Go bindings
 go generate ./...
 
-# 2. Compile the Go user-space daemon
+# 2) Build user-space binary
 go build -o xdp-firewall
 
-# 3. Run the firewall (requires root privileges to attach to the network interface)
-# Note: Ensure the target interface (e.g., eth0, enp0s3) is correctly set in main.go
+# 3) Run (root required to attach XDP)
 sudo ./xdp-firewall
+```
+
+## Runtime Behavior
+
+* Every inbound ICMP packet is dropped.
+* `icmp_stats` tracks drops per source IP.
+* The Go daemon prints incremental and cumulative counts once per second.
+
+## Configuration
+
+* The target interface is currently hardcoded in `main.go` as `ifaceName := "enp0s3"`.
+* Change it to match your host interface (for example `eth0`, `ens33`, `enp0s3`).
