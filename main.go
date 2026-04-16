@@ -7,10 +7,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-
+	"time"
 	"github.com/cilium/ebpf/link"
-	"github.com/cilium/ebpf/ringbuf"
-
 	"github.com/pnaessen/xdp-firewall/bpf"
 )
 
@@ -39,27 +37,37 @@ func main() {
 
 	fmt.Printf(" XDP firewall active on %s. Ready to block.\n", ifaceName)
 
-	rd, err := ringbuf.NewReader(objs.Events)
-	if err != nil {
-		log.Fatalf("Failed to open Ring Buffer: %v", err)
-	}
-	defer rd.Close()
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 
 	go func() {
-		for {
-			record, err := rd.Read()
-			if err != nil {
-				break
-			}
 
-			if len(record.RawSample) >= 4 {
-				ip := net.IPv4(
-					record.RawSample[0],
-					record.RawSample[1],
-					record.RawSample[2],
-					record.RawSample[3],
-				)
-				fmt.Printf(" XDP DROP: Ping packet blocked from IP %s\n", ip.String())
+		previousStats := make(map[string]uint64)
+
+		for range ticker.C {
+			var key [4]byte
+			var cpuValues []uint64
+
+			iterator := objs.IcmpStats.Iterate()
+
+			for iterator.Next(&key, &cpuValues) {
+				var currentTotal uint64 = 0
+
+				for _, val := range cpuValues {
+					currentTotal += val
+				}
+
+				ip := net.IPv4(key[0], key[1], key[2], key[3]).String()
+				prevTotal := previousStats[ip]
+				delta := currentTotal - prevTotal
+
+				if delta > 0 {
+					fmt.Printf("XDP drop: %d ping block from ip %s (Total ping block: %d)", delta, ip, currentTotal)
+					previousStats[ip] = currentTotal
+				}
+			}
+			if err := iterator.Err(); err != nil {
+				log.Printf("Erreur lors de la lecture de la map: %v\n", err)
 			}
 		}
 	}()
