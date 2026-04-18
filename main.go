@@ -62,7 +62,7 @@ func main() {
 				delta := currentTotal - prevTotal
 
 				if delta > 0 {
-					fmt.Printf("XDP drop: %d ping block from ip %s (Total ping block: %d)", delta, ip, currentTotal)
+					fmt.Printf("XDP drop: %d ping block from ip %s (Total ping block: %d)\n", delta, ip, currentTotal)
 					previousStats[ip] = currentTotal
 				}
 			}
