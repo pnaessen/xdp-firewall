@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	ifaceName := "enp0s3"
+	ifaceName := "eth0"
 
 	var objs bpf.BpfObjects
 	if err := bpf.LoadBpfObjects(&objs, nil); err != nil {
@@ -45,6 +45,8 @@ func main() {
 		previousStats := make(map[string]uint64)
 
 		for range ticker.C {
+
+			seenIPs := make(map[string]bool)
 			var key [4]byte
 			var cpuValues []uint64
 
@@ -65,9 +67,16 @@ func main() {
 					fmt.Printf("XDP drop: %d ping block from ip %s (Total ping block: %d)\n", delta, ip, currentTotal)
 					previousStats[ip] = currentTotal
 				}
+				seenIPs[ip] = true
 			}
 			if err := iterator.Err(); err != nil {
 				log.Printf("Erreur lors de la lecture de la map: %v\n", err)
+			}
+
+			for ip := range previousStats {
+				if !seenIPs[ip] {
+					delete(previousStats, ip)
+				}
 			}
 		}
 	}()
