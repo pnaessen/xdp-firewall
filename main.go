@@ -8,16 +8,13 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-
 	"github.com/cilium/ebpf/link"
-
 	"github.com/pnaessen/xdp-firewall/bpf"
 )
 
 // XDP firewall entry point: orchestrates eBPF program lifecycle (load, attach, monitor, cleanup).
 func main() {
-	// Target network interface
-	ifaceName := "enp0s3"
+	ifaceName := "eth0"
 
 	// Load compiled eBPF bytecode into kernel memory
 	var objs bpf.BpfObjects
@@ -47,27 +44,42 @@ func main() {
 	defer ticker.Stop()
 
 	go func() {
+
+		previousStats := make(map[string]uint64)
+
 		for range ticker.C {
+
+			seenIPs := make(map[string]bool)
 			var key [4]byte
 			var cpuValues []uint64
 
 			iterator := objs.IcmpStats.Iterate()
 
 			for iterator.Next(&key, &cpuValues) {
-				var totalPackets uint64 = 0
+				var currentTotal uint64 = 0
+
 				for _, val := range cpuValues {
-					totalPackets += val
+					currentTotal += val
 				}
 
-				ip := net.IPv4(key[0], key[1], key[2], key[3])
+				ip := net.IPv4(key[0], key[1], key[2], key[3]).String()
+				prevTotal := previousStats[ip]
+				delta := currentTotal - prevTotal
 
-				if totalPackets > 0 {
-					fmt.Printf(" Stats: %d pings blocked from IP %s\n", totalPackets, ip.String())
+				if delta > 0 {
+					fmt.Printf("XDP drop: %d ping block from ip %s (Total ping block: %d)\n", delta, ip, currentTotal)
+					previousStats[ip] = currentTotal
 				}
+				seenIPs[ip] = true
+			}
+			if err := iterator.Err(); err != nil {
+				log.Printf("Erreur lors de la lecture de la map: %v\n", err)
 			}
 
-			if err := iterator.Err(); err != nil {
-				log.Printf("Error iterating map: %v", err)
+			for ip := range previousStats {
+				if !seenIPs[ip] {
+					delete(previousStats, ip)
+				}
 			}
 		}
 	}()

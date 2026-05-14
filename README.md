@@ -1,43 +1,49 @@
-# XDP-Firewall : High-Performance eBPF Packet Filter
+# xdp-firewall
 
-##  Description
-Implémentation d'un pare-feu réseau de bas niveau utilisant la technologie **eBPF/XDP (eXpress Data Path)** pour le filtrage de paquets à haute performance (Kernel Bypass).
-Ce projet démontre la capacité à contourner la pile réseau classique de l'OS pour traiter les paquets directement au niveau du pilote de la carte réseau, offrant une protection anti-DDoS avec une latence quasi nulle.
+> A high-performance packet filter using eBPF/XDP in kernel space (C) and a Go user-space loader/monitor.
 
-##  Architecture
+## Overview
 
-* **Kernel Space (C)** : Un programme eBPF attaché au point d'ancrage XDP. Il intercepte les trames Ethernet/IPv4 brutes directement depuis le DMA, effectue des vérifications de limites strictes (Boundary Checks), et rejette (`XDP_DROP`) les paquets ICMP.
-* **User Space (Go)** : Un démon de supervision orchestrant le cycle de vie du programme eBPF (chargement, attachement, détachement sécurisé via signaux POSIX).
-* **Communication Lockless (PERCPU_HASH)** : La communication entre le noyau et l'espace utilisateur s'effectue via une map eBPF de type `BPF_MAP_TYPE_PERCPU_HASH`. Cette architecture sans mutex garantit la remontée haute-performance des statistiques par CPU.
+This project implements an ultra-low-latency XDP firewall that drops ICMP packets before they reach the Linux network stack.
 
-**Résultat attendu :** Les paquets ICMP seront détruits instantanément au niveau du pilote de la carte réseau de la machine hôte. Le terminal du pare-feu affichera l'interception en temps réel.
+The eBPF program is attached at the XDP hook and keeps counters per source IP in a PERCPU map. The Go daemon loads the program, attaches it to a network interface, and periodically prints aggregated drop statistics.
 
----
+## Architecture and Features
 
+* **XDP packet filtering**: Drops ICMP packets (`XDP_DROP`) at driver level.
+* **PERCPU counters**: Uses a `BPF_MAP_TYPE_PERCPU_HASH` map (`icmp_stats`) keyed by source IPv4 address.
+* **Low-contention stats path**: Per-CPU counters reduce write contention inside the kernel.
+* **Go integration with bpf2go**: Uses Cilium `bpf2go` to compile the eBPF program and generate typed Go bindings.
+* **Periodic monitoring**: User space iterates over the map every second, sums per-CPU values, and prints delta + total drops per IP.
+* **Graceful shutdown**: Handles `SIGINT` and `SIGTERM` and detaches the XDP program cleanly.
 
+## Prerequisites
+
+* Linux kernel with eBPF/XDP support
+* `clang` and `llvm`
+* `golang` (1.21+)
+* `libbpf-dev` and Linux headers
+
+## Build and Run
 
 ```bash
-go generate ./bpf
-```
-Cette commande :
-- Exécute le build tag `//go:generate` dans `bpf/gen.go`
-- Appelle `bpf2go` pour compiler `xdp_filter.c` en bytecode eBPF
-- Génère les fichiers `bpf_bpfel.go` et `bpf_bpfeb.go` (little/big endian)
+# 1) Generate eBPF objects and Go bindings
+go generate ./...
 
-```bash
+# 2) Build user-space binary
 go build -o xdp-firewall
+
+# 3) Run (root required to attach XDP)
+sudo ./xdp-firewall
 ```
 
+## Runtime Behavior
 
+* Every inbound ICMP packet is dropped.
+* `icmp_stats` tracks drops per source IP.
+* The Go daemon prints incremental and cumulative counts once per second.
 
-### main.go
-- `LoadBpfObjects()`: Charge le bytecode eBPF compilé en mémoire kernel
-- `AttachXDP()`: Attache le programme au hook XDP de l'interface réseau
-- Goroutine d'affichage: Lit la map `icmp_stats` chaque seconde
-- Graceful shutdown: Nettoie les ressources via signaux POSIX
+## Configuration
 
-### xdp_filter.c
-- **Boundary checks** : Validation stricte des limites du paquet (eBPF verifier requirement)
-- **PERCPU_HASH** : Pas de contention entre CPUs, lecture atomique du compteur
-
-
+* The target interface is currently hardcoded in `main.go` as `ifaceName := "enp0s3"`.
+* Change it to match your host interface (for example `eth0`, `ens33`, `enp0s3`).

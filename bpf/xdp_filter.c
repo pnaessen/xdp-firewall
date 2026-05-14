@@ -12,7 +12,7 @@
 // eBPF map: per-CPU hash table for ICMP packet statistics
 // Type PERCPU_HASH: each CPU maintains its own isolated copy (lockless)
 struct {
-    __uint(type, BPF_MAP_TYPE_PERCPU_HASH);
+    __uint(type, BPF_MAP_TYPE_LRU_PERCPU_HASH);
     __uint(max_entries, MAX_IPS);
     __type(key, __u32);
     __type(value, __u64);
